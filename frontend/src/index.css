@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body {
+    @apply bg-gray-50 text-gray-900;
+  }
+}
+
+@layer components {
+  .chat-container {
+    @apply h-screen flex flex-col;
+  }
+  
+  .chat-header {
+    @apply bg-white border-b border-gray-200 px-6 py-4 shadow-sm;
+  }
+  
+  .chat-messages {
+    @apply flex-1 overflow-y-auto p-6 space-y-4;
+  }
+  
+  .chat-input-container {
+    @apply bg-white border-t border-gray-200 px-6 py-4;
+  }
+  
+  .message-user {
+    @apply ml-auto max-w-3/4 bg-blue-500 text-white rounded-lg rounded-bl-none px-4 py-2;
+  }
+  
+  .message-assistant {
+    @apply mr-auto max-w-3/4 bg-gray-200 text-gray-800 rounded-lg rounded-br-none px-4 py-2;
+  }
+  
+  .message-source {
+    @apply bg-gray-100 border border-gray-200 rounded-lg p-4 mt-2;
+  }
+  
+  .source-item {
+    @apply mb-2 pb-2 border-b border-gray-200 last:border-b-0;
+  }
+  
+  .loading-dots {
+    @apply inline-flex space-x-1;
+  }
+  
+  .loading-dot {
+    @apply w-2 h-2 bg-gray-400 rounded-full animate-bounce;
+    animation-delay: calc(var(--delay) * 0.1s);
+  }
+  
+  .document-item {
+    @apply bg-white border border-gray-200 rounded-lg p-4 mb-3 hover:shadow-md transition-shadow;
+  }
+  
+  .upload-area {
+    @apply border-2 border-dashed border-gray-300 rounded-lg p-8 text-center hover:border-blue-500 transition-colors cursor-pointer;
+  }
+  
+  .upload-area.drag-over {
+    @apply border-blue-500 bg-blue-50;
+  }
+}

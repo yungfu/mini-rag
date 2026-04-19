@@ -1,0 +1,148 @@
+version: '3.8'
+
+services:
+  # PostgreSQL数据库服务
+  db:
+    image: postgres:15-alpine
+    container_name: mini-rag-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: rag_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - rag_network
+
+  # 后端API服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: mini-rag-backend
+    restart: unless-stopped
+    environment:
+      # 数据库配置
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_NAME=rag_db
+      - DB_USER=postgres
+      - DB_PASSWORD=postgres
+      
+      # LLM配置 (示例，实际使用时需要替换为真实的API密钥)
+      - LLM_PROVIDER=openai
+      - LLM_API_KEY=${LLM_API_KEY:-your-api-key-here}
+      - LLM_MODEL=gpt-3.5-turbo
+      - LLM_BASE_URL=${LLM_BASE_URL}
+      
+      # Embedding配置
+      - EMBEDDING_MODEL=text-embedding-ada-002
+      - EMBEDDING_DIM=1536
+      
+      # Rerank配置
+      - RERANK_MODEL=${RERANK_MODEL:-}
+      - RERANK_ENABLED=${RERANK_ENABLED:-false}
+      
+      # 检索配置
+      - TOP_K=5
+      - SIMILARITY_THRESHOLD=0.7
+      
+      # 缓存配置
+      - ENABLE_SEMANTIC_CACHE=true
+      - CACHE_SIMILARITY_THRESHOLD=0.85
+      - CACHE_TTL_DAYS=7
+      
+      # 文档处理配置
+      - CHUNK_SIZE=512
+      - CHUNK_OVERLAP=50
+      - SUPPORTED_FORMATS=md,txt,html
+      
+      # Redis配置 (可选)
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_DB=0
+      
+      # 文件上传配置
+      - UPLOAD_DIR=/app/uploads
+      - MAX_FILE_SIZE=10485760
+      
+      # 日志配置
+      - LOG_LEVEL=INFO
+      - DEBUG=false
+      
+      # Docker相关配置
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/config:/app/config
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - rag_network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis缓存服务 (可选)
+  redis:
+    image: redis:7-alpine
+    container_name: mini-rag-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - rag_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # 前端服务
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: mini-rag-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    networks:
+      - rag_network
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+# 网络配置
+networks:
+  rag_network:
+    driver: bridge
+
+# 数据卷
+volumes:
+  pg_data:
+    driver: local
+  redis_data:
+    driver: local
