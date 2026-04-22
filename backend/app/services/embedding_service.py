@@ -1,10 +1,8 @@
-import json
 import asyncio
-from typing import List, Optional, Dict, Any
-from litellm import embedding as litellm_embedding
-import numpy as np
-from sentence_transformers import SentenceTransformer
+import hashlib
+from typing import List, Dict, Any
 import logging
+from langchain_ollama import OllamaEmbeddings
 
 from app.config import settings
 
@@ -15,21 +13,13 @@ class EmbeddingService:
     
     def __init__(self):
         self.model_name = settings.EMBEDDING_MODEL
-        self.provider = settings.LLM_PROVIDER
         self.embedding_dim = settings.EMBEDDING_DIM
+        self.ollama_base_url = (settings.LLM_BASE_URL or "http://localhost:11434").rstrip("/")
+        self.embedding_client = OllamaEmbeddings(
+            model=self.model_name,
+            base_url=self.ollama_base_url,
+        )
         self.cache = {}  # 简单的内存缓存
-        
-        # 初始化本地模型（如果使用）
-        if self.provider == "local":
-            try:
-                self.local_model = SentenceTransformer('all-MiniLM-L6-v2')
-                self.embedding_dim = 384  # all-MiniLM-L6-v2的维度
-                logger.info(f"本地嵌入模型加载成功: {self.model_name}")
-            except Exception as e:
-                logger.error(f"本地模型加载失败: {e}")
-                self.local_model = None
-        else:
-            self.local_model = None
     
     async def get_embedding(self, text: str) -> List[float]:
         """获取文本嵌入向量"""
@@ -40,12 +30,8 @@ class EmbeddingService:
             return self.cache[cache_key]
         
         try:
-            if self.provider == "local" and self.local_model:
-                # 使用本地模型
-                embedding = await self._get_local_embedding(text)
-            else:
-                # 使用远程API
-                embedding = await self._get_remote_embedding(text)
+            # 仅使用远程API生成嵌入
+            embedding = await self._get_remote_embedding(text)
             
             # 缓存结果（限制缓存大小）
             if len(self.cache) < 1000:
@@ -58,17 +44,12 @@ class EmbeddingService:
             raise Exception(f"嵌入生成失败: {str(e)}")
     
     async def _get_remote_embedding(self, text: str) -> List[float]:
-        """获取远程嵌入向量"""
+        """通过LangChain的Ollama Embeddings获取远程嵌入向量"""
         try:
-            response = litellm_embedding(
-                model=self.model_name,
-                input=[text],
-                api_key=settings.LLM_API_KEY,
-                base_url=settings.LLM_BASE_URL,
-                timeout=30
-            )
-            
-            embedding = response['data'][0]['embedding']
+            embedding = await asyncio.to_thread(self.embedding_client.embed_query, text)
+
+            if not embedding:
+                raise Exception("Ollama返回的embedding为空")
             
             # 验证嵌入维度
             if len(embedding) != self.embedding_dim:
@@ -77,22 +58,8 @@ class EmbeddingService:
             return embedding
             
         except Exception as e:
-            logger.error(f"远程嵌入调用失败: {e}")
-            raise Exception(f"远程嵌入生成失败: {str(e)}")
-    
-    async def _get_local_embedding(self, text: str) -> List[float]:
-        """获取本地嵌入向量"""
-        if not self.local_model:
-            raise Exception("本地嵌入模型未加载")
-        
-        try:
-            # 使用sentence-transformers
-            embedding = self.local_model.encode(text)
-            return embedding.tolist()
-            
-        except Exception as e:
-            logger.error(f"本地嵌入生成失败: {e}")
-            raise Exception(f"本地嵌入生成失败: {str(e)}")
+            logger.error(f"Ollama嵌入调用失败: {e}")
+            raise Exception(f"Ollama嵌入生成失败: {str(e)}")
     
     async def get_batch_embeddings(self, texts: List[str]) -> List[List[float]]:
         """批量获取嵌入向量"""
@@ -137,15 +104,10 @@ class EmbeddingService:
     def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
         """计算余弦相似度"""
         try:
-            vec1 = np.array(vec1)
-            vec2 = np.array(vec2)
-            
-            # 计算点积
-            dot_product = np.dot(vec1, vec2)
-            
-            # 计算模长
-            norm1 = np.linalg.norm(vec1)
-            norm2 = np.linalg.norm(vec2)
+            # 纯 Python 计算，避免对 numpy 的运行时依赖
+            dot_product = sum(a * b for a, b in zip(vec1, vec2))
+            norm1 = sum(a * a for a in vec1) ** 0.5
+            norm2 = sum(b * b for b in vec2) ** 0.5
             
             # 计算余弦相似度
             if norm1 == 0 or norm2 == 0:

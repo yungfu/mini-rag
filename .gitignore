@@ -18,6 +18,7 @@ logs/
 temp/
 tmp/
 .cache/
+*.bak
 
 # IDE
 .vscode/
@@ -26,6 +27,9 @@ tmp/
 # OS
 .DS_Store
 Thumbs.db
+
+# Vim
+*~
 
 # 数据库数据 (如果不希望提交到git)
 pg_data/

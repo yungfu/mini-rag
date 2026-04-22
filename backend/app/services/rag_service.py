@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import logging
 from sqlalchemy.orm import Session
 from sqlalchemy import text, and_, or_
+from langchain_ollama import ChatOllama
+from langchain_core.messages import HumanMessage
 
 from app.database import get_async_db, SessionLocal
 from app.models import DocumentChunk, SemanticCache
@@ -318,19 +320,26 @@ class RAGService:
 
 回答："""
             
-            # 调用LLM生成答案
-            from litellm import completion
-            
-            response = completion(
+            # 使用LangChain调用Ollama生成答案
+            llm = ChatOllama(
                 model=settings.LLM_MODEL,
-                messages=[{"role": "user", "content": prompt}],
-                api_key=settings.LLM_API_KEY,
-                base_url=settings.LLM_BASE_URL,
+                base_url=(settings.LLM_BASE_URL or "http://localhost:11434"),
                 temperature=0.7,
-                max_tokens=1000
             )
-            
-            answer = response.choices[0].message.content
+
+            response = await asyncio.to_thread(
+                llm.invoke,
+                [HumanMessage(content=prompt)],
+            )
+
+            content = response.content
+            if isinstance(content, str):
+                answer = content
+            else:
+                answer = "".join(
+                    part.get("text", "") if isinstance(part, dict) else str(part)
+                    for part in content
+                )
             
             return answer.strip()
             
