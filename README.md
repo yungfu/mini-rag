@@ -71,7 +71,7 @@ LLM_MODEL=gpt-3.5-turbo
 
 使用Docker Compose启动所有服务：
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 服务启动后：
@@ -81,18 +81,18 @@ docker-compose up -d
 
 ### 开发模式
 
-如果需要开发模式（带热重载）：
+如果需要开发模式（带热重载，推荐使用 just + uv）：
 
 1. 启动数据库：
 ```bash
-docker-compose up -d db
+docker compose up -d db
 ```
 
 2. 启动后端（开发模式）：
 ```bash
 cd backend
-pip install -r requirements.txt
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+uv sync --dev
+uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
 3. 启动前端（开发模式）：
@@ -199,17 +199,17 @@ npm run dev
 1. 修改环境变量配置
 2. 构建镜像：
 ```bash
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml build
+docker compose -f docker-compose.yml -f docker-compose.prod.yml build
 ```
 
 3. 启动服务：
 ```bash
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 ```
 
 ### 监控和运维
 
-- 查看日志：`docker-compose logs -f [service]`
+- 查看日志：`docker compose logs -f [service]`
 - 健康检查：访问 `/health` 端点
 - 数据备份：定期备份pg_data目录
 
@@ -250,13 +250,13 @@ docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
 
 ```bash
 # 查看后端日志
-docker-compose logs -f backend
+docker compose logs -f backend
 
 # 查看前端日志
-docker-compose logs -f frontend
+docker compose logs -f frontend
 
 # 查看数据库日志
-docker-compose logs -f db
+docker compose logs -f db
 ```
 
 ## 贡献指南
@@ -280,3 +280,20 @@ MIT License
 ---
 
 **MiniRAG** - 让AI问答更加智能和高效！
+## 开发命令（Just）
+
+项目已从 Makefile 迁移到 justfile：
+
+```bash
+# 查看可用命令
+just
+
+# 安装依赖（后端使用 uv）
+just install-dev
+
+# 启动开发环境
+just run-dev
+
+# 后端测试
+just test-backend
+```

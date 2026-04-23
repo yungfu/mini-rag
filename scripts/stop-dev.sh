@@ -66,8 +66,8 @@ stop_frontend() {
 stop_docker() {
     print_info "停止Docker容器..."
     
-    if docker-compose ps -q | grep -q .; then
-        docker-compose down
+    if docker compose ps -q | grep -q .; then
+        docker compose down
         print_success "Docker容器已停止"
     else
         print_warning "没有运行中的Docker容器"

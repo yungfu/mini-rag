@@ -1,10 +1,35 @@
 [project]
 name = "backend"
 version = "0.1.0"
-description = "Add your description here"
+description = "MiniRAG backend service"
 readme = "README.md"
-requires-python = ">=3.13"
-dependencies = []
+requires-python = ">=3.11"
+dependencies = [
+    "aiofiles==23.2.0",
+    "fastapi==0.104.1",
+    "langchain>=1.0.0,<2.0.0",
+    "langchain-ollama>=1.0.0,<2.0.0",
+    "pgvector==0.2.5",
+    "psycopg2-binary==2.9.10",
+    "pydantic==2.10.6",
+    "pymilvus>=2.5.0,<3.0.0",
+    "python-decouple==3.8",
+    "python-multipart==0.0.6",
+    "redis==5.0.1",
+    "sqlalchemy==2.0.23",
+    "uvicorn==0.24.0",
+]
+
+[dependency-groups]
+dev = [
+    "bandit>=1.8.0",
+    "black>=24.0.0",
+    "flake8>=7.0.0",
+    "isort>=5.13.0",
+    "mypy>=1.10.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
 
 [tool.uv]
 index-url = "https://pypi.tuna.tsinghua.edu.cn/simple"

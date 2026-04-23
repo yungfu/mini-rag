@@ -40,9 +40,15 @@ check_dependencies() {
         exit 1
     fi
     
-    # 检查Docker Compose
-    if ! command -v docker-compose &> /dev/null; then
-        print_error "Docker Compose 未安装，请先安装 Docker Compose"
+    # 检查Docker Compose v2
+    if ! docker compose version > /dev/null 2>&1; then
+        print_error "Docker Compose v2 未安装，请先安装 Docker Compose 插件"
+        exit 1
+    fi
+
+    # 检查uv
+    if ! command -v uv &> /dev/null; then
+        print_error "uv 未安装，请先安装 uv"
         exit 1
     fi
     
@@ -78,13 +84,13 @@ create_directories() {
 start_database() {
     print_info "启动数据库..."
     
-    docker-compose up -d db
+    docker compose up -d db
     
     print_info "等待数据库启动..."
     sleep 30
     
     # 检查数据库是否就绪
-    if docker-compose exec -T db pg_isready -U postgres; then
+    if docker compose exec -T db pg_isready -U postgres; then
         print_success "数据库启动成功"
     else
         print_error "数据库启动失败"
@@ -98,18 +104,9 @@ start_backend() {
     
     cd backend
     
-    # 检查虚拟环境
-    if [ ! -d "venv" ]; then
-        print_info "创建Python虚拟环境..."
-        python3 -m venv venv
-    fi
-    
-    # 激活虚拟环境并安装依赖
-    source venv/bin/activate
-    pip install -r requirements.txt
-    
-    # 启动后端服务
-    uvicorn main:app --reload --host 0.0.0.0 --port 8000 &
+    # 使用uv同步依赖并启动后端服务
+    uv sync --dev
+    uv run uvicorn main:app --reload --host 0.0.0.0 --port 8000 &
     BACKEND_PID=$!
     
     cd ..
@@ -192,7 +189,7 @@ cleanup() {
     fi
     
     # 停止Docker容器
-    docker-compose down
+    docker compose down
     
     print_success "清理完成"
     exit 0
