@@ -49,3 +49,6 @@ env/
 ENV/
 *.pyc
 __pycache__/
+
+# codex
+.codex

@@ -32,6 +32,10 @@ install-front:
 
 run-dev:
     @echo "启动开发环境..."
+    @if ! docker info >/dev/null 2>&1; then \
+        echo "错误: Docker daemon 未运行。请先启动 Docker Desktop，或执行 'sudo service docker start'。"; \
+        exit 1; \
+    fi
     docker compose up db -d
     @echo "数据库启动完成，等待10秒..."
     sleep 10

@@ -49,6 +49,8 @@ class Settings(BaseSettings):
     # 文档处理配置
     CHUNK_SIZE: int = config("CHUNK_SIZE", default=512, cast=int)
     CHUNK_OVERLAP: int = config("CHUNK_OVERLAP", default=50, cast=int)
+    PARENT_CHUNK_SIZE: int = config("PARENT_CHUNK_SIZE", default=2048, cast=int)
+    PARENT_CHUNK_OVERLAP: int = config("PARENT_CHUNK_OVERLAP", default=0, cast=int)
     SUPPORTED_FORMATS: List[str] = config("SUPPORTED_FORMATS", default=["md", "txt", "html"], cast=lambda x: x.split(","))
     
     # Redis配置（可选）
@@ -94,6 +96,21 @@ def validate_settings():
     
     if settings.CHUNK_OVERLAP < 0:
         errors.append("CHUNK_OVERLAP must be non-negative")
+
+    if settings.CHUNK_OVERLAP >= settings.CHUNK_SIZE:
+        errors.append("CHUNK_OVERLAP must be smaller than CHUNK_SIZE")
+
+    if settings.PARENT_CHUNK_SIZE <= 0:
+        errors.append("PARENT_CHUNK_SIZE must be greater than 0")
+
+    if settings.PARENT_CHUNK_SIZE < settings.CHUNK_SIZE:
+        errors.append("PARENT_CHUNK_SIZE must be greater than or equal to CHUNK_SIZE")
+
+    if settings.PARENT_CHUNK_OVERLAP < 0:
+        errors.append("PARENT_CHUNK_OVERLAP must be non-negative")
+
+    if settings.PARENT_CHUNK_OVERLAP >= settings.PARENT_CHUNK_SIZE:
+        errors.append("PARENT_CHUNK_OVERLAP must be smaller than PARENT_CHUNK_SIZE")
     
     if errors:
         raise ValueError(f"Configuration validation failed: {', '.join(errors)}")

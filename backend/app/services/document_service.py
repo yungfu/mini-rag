@@ -1,13 +1,12 @@
 import os
 import uuid
-import hashlib
 from typing import List, Optional, Dict, Any
 from datetime import datetime
 import aiofiles
 from fastapi import HTTPException, UploadFile
 import asyncio
 
-from app.database import get_async_db, SessionLocal
+from app.database import SessionLocal
 from app.models import Document, DocumentChunk, ProcessingLog
 from app.config import settings
 from app.services.embedding_service import EmbeddingService
@@ -20,6 +19,8 @@ class DocumentService:
         self.supported_formats = settings.SUPPORTED_FORMATS
         self.chunk_size = settings.CHUNK_SIZE
         self.chunk_overlap = settings.CHUNK_OVERLAP
+        self.parent_chunk_size = settings.PARENT_CHUNK_SIZE
+        self.parent_chunk_overlap = settings.PARENT_CHUNK_OVERLAP
         self.upload_dir = settings.UPLOAD_DIR
         
         # 确保上传目录存在
@@ -132,48 +133,78 @@ class DocumentService:
             raise Exception(f"文档解析失败: {str(e)}")
     
     async def _create_chunks(self, content: str, doc_id: str) -> List[Dict[str, Any]]:
-        """创建文档切片"""
+        """创建父子切片：小块用于召回，大块用于生成。"""
         chunks = []
-        
-        # 简单的按字符数分割
         text_length = len(content)
-        chunk_count = (text_length // self.chunk_size) + 1
-        
-        for i in range(chunk_count):
-            start = i * self.chunk_size
-            end = min((i + 1) * self.chunk_size + self.chunk_overlap, text_length)
-            
-            # 小切片：用于BM25检索
-            small_chunk = content[start:end]
-            
-            # 大切块：用于生成答案（包含更多上下文）
-            large_start = max(0, i * self.chunk_size - self.chunk_overlap)
-            large_end = min((i + 1) * self.chunk_size + self.chunk_overlap, text_length)
-            large_chunk = content[large_start:large_end]
-            
-            chunks.append({
-                "doc_id": doc_id,
-                "content_text": small_chunk,
-                "content_large": large_chunk,
-                "metadata": {
-                    "chunk_index": i,
-                    "total_chunks": chunk_count,
-                    "small_chunk_start": start,
-                    "small_chunk_end": end,
-                    "large_chunk_start": large_start,
-                    "large_chunk_end": large_end
-                }
-            })
-        
+        if text_length == 0:
+            return chunks
+
+        parent_step = max(1, self.parent_chunk_size - self.parent_chunk_overlap)
+        child_step = max(1, self.chunk_size - self.chunk_overlap)
+
+        parent_index = 0
+        chunk_index = 0
+        parent_start = 0
+
+        while parent_start < text_length:
+            parent_end = min(parent_start + self.parent_chunk_size, text_length)
+            parent_content = content[parent_start:parent_end]
+
+            child_index = 0
+            child_start = parent_start
+            while child_start < parent_end:
+                child_end = min(child_start + self.chunk_size, parent_end)
+                small_chunk = content[child_start:child_end]
+
+                if small_chunk.strip():
+                    chunks.append({
+                        "doc_id": doc_id,
+                        "content_text": small_chunk,
+                        "content_large": parent_content,
+                        "metadata": {
+                            "chunk_index": chunk_index,
+                            "parent_index": parent_index,
+                            "child_index": child_index,
+                            "small_chunk_start": child_start,
+                            "small_chunk_end": child_end,
+                            "large_chunk_start": parent_start,
+                            "large_chunk_end": parent_end,
+                            "retrieval_unit": "child",
+                            "generation_unit": "parent"
+                        }
+                    })
+                    chunk_index += 1
+
+                if child_end >= parent_end:
+                    break
+
+                child_start += child_step
+                child_index += 1
+
+            if parent_end >= text_length:
+                break
+
+            parent_start += parent_step
+            parent_index += 1
+
+        total_chunks = len(chunks)
+        total_parents = parent_index + 1
+        for chunk in chunks:
+            chunk["metadata"]["total_chunks"] = total_chunks
+            chunk["metadata"]["total_parent_chunks"] = total_parents
+
         return chunks
     
     async def _store_chunks(self, chunks: List[Dict[str, Any]]):
         """存储文档切片"""
-        # 生成所有向量的批处理
-        embeddings = []
-        for chunk in chunks:
-            embedding = await self.embedding_service.get_embedding(chunk["content_text"])
-            embeddings.append(embedding)
+        if not chunks:
+            return
+
+        # 只为子块生成向量；父块通过 metadata/content_large 关联，用于答案生成。
+        embeddings = await self.embedding_service.get_batch_embeddings([
+            chunk["content_text"] for chunk in chunks
+        ])
+        for chunk, embedding in zip(chunks, embeddings):
             chunk["embedding"] = embedding
         
         # 批量存储到数据库
@@ -184,8 +215,8 @@ class DocumentService:
                     doc_id=chunk["doc_id"],
                     content_text=chunk["content_text"],
                     content_large=chunk["content_large"],
-                    embedding=json.dumps(chunk["embedding"]),
-                    metadata=json.dumps(chunk["metadata"]),
+                    embedding=chunk["embedding"],
+                    metadata=chunk["metadata"],
                     chunk_index=chunk["metadata"]["chunk_index"]
                 )
                 db.add(document_chunk)

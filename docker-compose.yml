@@ -1,9 +1,7 @@
-version: '3.8'
-
 services:
   # PostgreSQL数据库服务
   db:
-    image: postgres:15-alpine
+    image: docker.m.daocloud.io/library/postgres:15-alpine
     container_name: mini-rag-db
     restart: unless-stopped
     environment:
@@ -42,7 +40,7 @@ services:
       - LLM_PROVIDER=openai
       - LLM_API_KEY=${LLM_API_KEY:-your-api-key-here}
       - LLM_MODEL=gpt-3.5-turbo
-      - LLM_BASE_URL=${LLM_BASE_URL}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
       
       # Embedding配置
       - EMBEDDING_MODEL=text-embedding-ada-002
@@ -64,12 +62,14 @@ services:
       # 文档处理配置
       - CHUNK_SIZE=512
       - CHUNK_OVERLAP=50
+      - PARENT_CHUNK_SIZE=2048
+      - PARENT_CHUNK_OVERLAP=0
       - SUPPORTED_FORMATS=md,txt,html
       
       # Redis配置 (可选)
       - REDIS_HOST=redis
       - REDIS_PORT=6379
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - REDIS_DB=0
       
       # 文件上传配置
@@ -101,7 +101,7 @@ services:
 
   # Redis缓存服务 (可选)
   redis:
-    image: redis:7-alpine
+    image: docker.m.daocloud.io/library/redis:7-alpine
     container_name: mini-rag-redis
     restart: unless-stopped
     ports:

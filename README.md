@@ -160,6 +160,8 @@ npm run dev
 
 - `CHUNK_SIZE`: 文档切片大小 (默认512)
 - `CHUNK_OVERLAP`: 文档切片重叠大小 (默认50)
+- `PARENT_CHUNK_SIZE`: 父块大小，生成答案时使用 (默认2048)
+- `PARENT_CHUNK_OVERLAP`: 父块重叠大小 (默认0)
 - `SUPPORTED_FORMATS`: 支持的文档格式 (md,txt,html)
 
 ## 数据库设计
@@ -179,7 +181,7 @@ npm run dev
 - `id`: 主键
 - `doc_id`: 外键关联文档
 - `content_text`: 小切片内容（用于BM25）
-- `content_large`: 大切块内容（用于生成）
+- `content_large`: 关联父块内容（用于生成）
 - `embedding`: 向量数据（pgvector类型）
 - `metadata`: 扩展元数据（jsonb类型）
 

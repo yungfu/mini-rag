@@ -1,8 +1,11 @@
 from sqlalchemy import Column, Integer, String, DateTime, Text, Boolean, JSON, Float, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
+from pgvector.sqlalchemy import Vector
 from datetime import datetime
 import json
+
+from app.config import settings
 
 Base = declarative_base()
 
@@ -42,7 +45,7 @@ class DocumentChunk(Base):
     doc_id = Column(String, ForeignKey("documents.doc_id"), nullable=False)
     content_text = Column(Text, nullable=False)  # 小切片内容，用于BM25
     content_large = Column(Text, nullable=False)  # 大切块内容，用于生成
-    embedding = Column(JSON, nullable=False)  # 向量数据
+    embedding = Column(Vector(settings.EMBEDDING_DIM), nullable=False)  # 小块向量数据
     metadata = Column(JSON, nullable=True)  # 扩展元数据
     chunk_index = Column(Integer, nullable=False)  # 切片序号
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -51,13 +54,20 @@ class DocumentChunk(Base):
     document = relationship("Document", back_populates="chunks")
     
     def to_dict(self):
+        embedding = self.embedding.tolist() if hasattr(self.embedding, "tolist") else self.embedding
+        metadata = self.metadata
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except json.JSONDecodeError:
+                metadata = {}
         return {
             "id": self.id,
             "doc_id": self.doc_id,
             "content_text": self.content_text,
             "content_large": self.content_large,
-            "embedding": self.embedding,
-            "metadata": self.metadata,
+            "embedding": embedding,
+            "metadata": metadata,
             "chunk_index": self.chunk_index,
             "created_at": self.created_at.isoformat() if self.created_at else None
         }
@@ -68,19 +78,28 @@ class SemanticCache(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     query_text = Column(Text, nullable=False)
-    query_embedding = Column(JSON, nullable=False)
+    query_embedding = Column(Vector(settings.EMBEDDING_DIM), nullable=False)
     cached_answer = Column(Text, nullable=False)
     similarity_score = Column(Float, nullable=False)
+    source_chunk_ids = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     expires_at = Column(DateTime, nullable=False)
     
     def to_dict(self):
+        query_embedding = self.query_embedding.tolist() if hasattr(self.query_embedding, "tolist") else self.query_embedding
+        source_chunk_ids = self.source_chunk_ids
+        if isinstance(source_chunk_ids, str):
+            try:
+                source_chunk_ids = json.loads(source_chunk_ids)
+            except json.JSONDecodeError:
+                source_chunk_ids = []
         return {
             "id": self.id,
             "query_text": self.query_text,
-            "query_embedding": self.query_embedding,
+            "query_embedding": query_embedding,
             "cached_answer": self.cached_answer,
             "similarity_score": self.similarity_score,
+            "source_chunk_ids": source_chunk_ids,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "expires_at": self.expires_at.isoformat() if self.expires_at else None
         }

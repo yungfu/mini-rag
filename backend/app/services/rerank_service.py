@@ -25,7 +25,7 @@ class RerankService:
         
         try:
             # 准备重排序数据
-            doc_texts = [doc["content_large"] for doc in documents]
+            doc_texts = [doc.get("content_text") or doc.get("content_large", "") for doc in documents]
             
             # 调用重排序模型
             reranked_results = await self._call_rerank_api(query, doc_texts)

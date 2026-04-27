@@ -4,12 +4,11 @@ import asyncio
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 import logging
-from sqlalchemy.orm import Session
-from sqlalchemy import text, and_, or_
+from sqlalchemy import text
 from langchain_ollama import ChatOllama
 from langchain_core.messages import HumanMessage
 
-from app.database import get_async_db, SessionLocal
+from app.database import SessionLocal
 from app.models import DocumentChunk, SemanticCache
 from app.config import settings
 from app.services.embedding_service import EmbeddingService
@@ -145,8 +144,8 @@ class RAGService:
             vector_results = await self._vector_search(query_embedding, top_k * 2)
             bm25_results = await self._bm25_search(query, top_k * 2)
             
-            # 3. 结果融合
-            fused_results = await self._fuse_results(vector_results, bm25_results, top_k)
+            # 3. 小块级结果融合
+            fused_results = await self._fuse_results(vector_results, bm25_results, top_k * 2)
             
             # 4. 重新排序（如果启用）
             if settings.RERANK_ENABLED and settings.RERANK_MODEL:
@@ -154,13 +153,16 @@ class RAGService:
                 rerank_used = True
             else:
                 rerank_used = False
+
+            # 5. 将召回的小块折叠到关联父块，生成阶段只使用父块上下文。
+            parent_contexts = self._select_parent_contexts(fused_results, top_k)
             
-            # 5. 生成最终答案
-            answer = await self._generate_answer(query, fused_results)
+            # 6. 生成最终答案
+            answer = await self._generate_answer(query, parent_contexts)
             
             return {
                 "answer": answer,
-                "sources": fused_results,
+                "sources": parent_contexts,
                 "rerank_used": rerank_used
             }
             
@@ -176,9 +178,9 @@ class RAGService:
             query = text("""
                 SELECT 
                     id, doc_id, content_text, content_large, embedding, metadata, chunk_index,
-                    1 - (embedding <=> :query_embedding) as similarity_score
+                    1 - (embedding <=> CAST(:query_embedding AS vector)) as similarity_score
                 FROM chunks 
-                WHERE 1 - (embedding <=> :query_embedding) >= :similarity_threshold
+                WHERE 1 - (embedding <=> CAST(:query_embedding AS vector)) >= :similarity_threshold
                 ORDER BY similarity_score DESC 
                 LIMIT :top_k
             """)
@@ -196,8 +198,8 @@ class RAGService:
                     "doc_id": row.doc_id,
                     "content_text": row.content_text,
                     "content_large": row.content_large,
-                    "embedding": json.loads(row.embedding),
-                    "metadata": json.loads(row.metadata) if row.metadata else {},
+                    "embedding": self._decode_json_field(row.embedding, []),
+                    "metadata": self._decode_json_field(row.metadata, {}),
                     "chunk_index": row.chunk_index,
                     "similarity_score": float(row.similarity_score)
                 })
@@ -215,7 +217,7 @@ class RAGService:
         db = SessionLocal()
         try:
             # 使用PostgreSQL的bm25扩展进行全文搜索
-            query = text("""
+            search_sql = text("""
                 SELECT 
                     id, doc_id, content_text, content_large, embedding, metadata, chunk_index,
                     ts_rank_cd(to_tsvector('chinese', content_text), to_tsquery('chinese', :query)) as rank_score
@@ -225,7 +227,7 @@ class RAGService:
                 LIMIT :top_k
             """)
             
-            result = db.execute(query, {
+            result = db.execute(search_sql, {
                 "query": query,
                 "top_k": top_k
             })
@@ -237,8 +239,8 @@ class RAGService:
                     "doc_id": row.doc_id,
                     "content_text": row.content_text,
                     "content_large": row.content_large,
-                    "embedding": json.loads(row.embedding) if row.embedding else [],
-                    "metadata": json.loads(row.metadata) if row.metadata else {},
+                    "embedding": self._decode_json_field(row.embedding, []),
+                    "metadata": self._decode_json_field(row.metadata, {}),
                     "chunk_index": row.chunk_index,
                     "bm25_score": float(row.rank_score)
                 })
@@ -253,46 +255,29 @@ class RAGService:
     
     async def _fuse_results(self, vector_results: List[Dict[str, Any]], 
                            bm25_results: List[Dict[str, Any]], top_k: int = 5) -> List[Dict[str, Any]]:
-        """融合搜索结果（RRF算法）"""
+        """融合小块搜索结果（RRF算法）。"""
         try:
-            # 创建文档ID到结果的映射
-            doc_to_chunks = {}
+            chunks_by_id = {}
             
             # 合并向量搜索结果
             for i, chunk in enumerate(vector_results):
-                doc_id = chunk["doc_id"]
-                if doc_id not in doc_to_chunks:
-                    doc_to_chunks[doc_id] = []
-                
-                chunk["vector_rank"] = i + 1
-                chunk["vector_score"] = 1 / (chunk["vector_rank"] + 60)
-                doc_to_chunks[doc_id].append(chunk)
+                chunk_id = chunk["id"]
+                merged = chunks_by_id.setdefault(chunk_id, dict(chunk))
+                merged["vector_rank"] = i + 1
+                merged["vector_score"] = 1 / (merged["vector_rank"] + 60)
             
             # 合并BM25搜索结果
             for i, chunk in enumerate(bm25_results):
-                doc_id = chunk["doc_id"]
-                if doc_id not in doc_to_chunks:
-                    doc_to_chunks[doc_id] = []
-                
-                chunk["bm25_rank"] = i + 1
-                chunk["bm25_score"] = 1 / (chunk["bm25_rank"] + 60)
-                doc_to_chunks[doc_id].append(chunk)
+                chunk_id = chunk["id"]
+                merged = chunks_by_id.setdefault(chunk_id, dict(chunk))
+                merged["bm25_rank"] = i + 1
+                merged["bm25_score"] = 1 / (merged["bm25_rank"] + 60)
             
             # 计算每个切片的综合得分
             fused_chunks = []
-            for doc_id, chunks in doc_to_chunks.items():
-                for chunk in chunks:
-                    # RRF融合公式
-                    if "vector_score" in chunk and "bm25_score" in chunk:
-                        chunk["fused_score"] = chunk["vector_score"] + chunk["bm25_score"]
-                    elif "vector_score" in chunk:
-                        chunk["fused_score"] = chunk["vector_score"]
-                    elif "bm25_score" in chunk:
-                        chunk["fused_score"] = chunk["bm25_score"]
-                    else:
-                        chunk["fused_score"] = 0
-                    
-                    fused_chunks.append(chunk)
+            for chunk in chunks_by_id.values():
+                chunk["fused_score"] = chunk.get("vector_score", 0) + chunk.get("bm25_score", 0)
+                fused_chunks.append(chunk)
             
             # 按综合得分排序
             fused_chunks.sort(key=lambda x: x["fused_score"], reverse=True)
@@ -303,6 +288,43 @@ class RAGService:
         except Exception as e:
             logger.error(f"结果融合失败: {e}")
             raise Exception(f"结果融合失败: {str(e)}")
+
+    def _decode_json_field(self, value: Any, default: Any) -> Any:
+        """兼容 JSON 字符串、JSON 列和 pgvector 返回值。"""
+        if value is None:
+            return default
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except json.JSONDecodeError:
+                return default
+        if hasattr(value, "tolist"):
+            return value.tolist()
+        return value
+
+    def _select_parent_contexts(self, child_chunks: List[Dict[str, Any]], top_k: int) -> List[Dict[str, Any]]:
+        """按召回小块得分选择唯一父块上下文。"""
+        parent_chunks = {}
+
+        for child in child_chunks:
+            metadata = child.get("metadata") or {}
+            parent_key = (
+                child.get("doc_id"),
+                metadata.get("parent_index", metadata.get("large_chunk_start", child.get("chunk_index")))
+            )
+            score = child.get("rerank_score", child.get("fused_score", child.get("similarity_score", 0)))
+
+            existing = parent_chunks.get(parent_key)
+            if existing is None or score > existing.get("parent_score", 0):
+                parent = dict(child)
+                parent["parent_score"] = score
+                parent["matched_child_content"] = child.get("content_text", "")
+                parent["matched_child_id"] = child.get("id")
+                parent_chunks[parent_key] = parent
+
+        parents = list(parent_chunks.values())
+        parents.sort(key=lambda item: item.get("parent_score", 0), reverse=True)
+        return parents[:top_k]
     
     async def _generate_answer(self, query: str, context_chunks: List[Dict[str, Any]]) -> str:
         """生成最终答案"""
@@ -358,23 +380,25 @@ class RAGService:
             
             db = SessionLocal()
             try:
-                # 查找最相似的缓存
-                query = text("""
-                    SELECT id, query_text, cached_answer, query_embedding, similarity_score
+                # 查找最相似的缓存，并用实时语义相似度判定是否命中。
+                cache_sql = text("""
+                    SELECT id, query_text, cached_answer, query_embedding, similarity_score, source_chunk_ids,
+                           1 - (query_embedding <=> CAST(:query_embedding AS vector)) AS cache_similarity
                     FROM semantic_cache 
                     WHERE expires_at > NOW()
-                    ORDER BY query_embedding <=> :query_embedding ASC
+                    ORDER BY query_embedding <=> CAST(:query_embedding AS vector) ASC
                     LIMIT 1
                 """)
                 
-                result = db.execute(query, {
+                result = db.execute(cache_sql, {
                     "query_embedding": json.dumps(query_embedding)
                 })
                 
                 row = result.fetchone()
-                if row and row.similarity_score >= self.cache_similarity_threshold:
+                cache_similarity = float(row.cache_similarity) if row and row.cache_similarity is not None else 0.0
+                if row and cache_similarity >= self.cache_similarity_threshold:
                     # 查找相关源文档
-                    source_chunks = await self._get_source_chunks_for_cache(row.id)
+                    source_chunks = await self._get_source_chunks_for_cache(row.source_chunk_ids)
                     
                     return {
                         "cached_answer": row.cached_answer,
@@ -405,9 +429,12 @@ class RAGService:
                 # 创建缓存记录
                 cache_record = SemanticCache(
                     query_text=query,
-                    query_embedding=json.dumps(query_embedding),
+                    query_embedding=query_embedding,
                     cached_answer=result["answer"],
                     similarity_score=1.0,  # 新缓存的相似度设为1.0
+                    source_chunk_ids=[
+                        source["id"] for source in result.get("sources", []) if source.get("id") is not None
+                    ],
                     expires_at=expires_at
                 )
                 
@@ -437,8 +464,33 @@ class RAGService:
         if current_chunk:
             yield " ".join(current_chunk)
     
-    async def _get_source_chunks_for_cache(self, cache_id: int) -> List[Dict[str, Any]]:
-        """获取缓存相关的源文档切片"""
-        # 这里可以实现从缓存中关联源文档的逻辑
-        # 目前返回空列表
-        return []
+    async def _get_source_chunks_for_cache(self, source_chunk_ids: Any) -> List[Dict[str, Any]]:
+        """获取缓存相关的源文档切片。"""
+        if not source_chunk_ids:
+            return []
+
+        try:
+            if isinstance(source_chunk_ids, str):
+                source_chunk_ids = json.loads(source_chunk_ids)
+            if not source_chunk_ids:
+                return []
+
+            db = SessionLocal()
+            try:
+                chunks = (
+                    db.query(DocumentChunk)
+                    .filter(DocumentChunk.id.in_(source_chunk_ids))
+                    .all()
+                )
+                chunks_by_id = {chunk.id: chunk.to_dict() for chunk in chunks}
+                return [
+                    chunks_by_id[chunk_id]
+                    for chunk_id in source_chunk_ids
+                    if chunk_id in chunks_by_id
+                ]
+            finally:
+                db.close()
+
+        except Exception as e:
+            logger.error(f"获取缓存源文档失败: {e}")
+            return []
